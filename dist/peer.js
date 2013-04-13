@@ -1,4 +1,4 @@
-/*! peerjs.js build:0.2.0, development. Copyright(c) 2013 Michelle Bu <michelle@michellebu.com> */
+/*! peerjs.js build:0.2.1, development. Copyright(c) 2013 Michelle Bu <michelle@michellebu.com> */
 (function(exports){
 var binaryFeatures = {};
 binaryFeatures.useBlobBuilder = (function(){
@@ -721,7 +721,7 @@ EventEmitter.prototype.emit = function(type) {
 var util = {
   
   chromeCompatible: true,
-  firefoxCompatible: true,
+  firefoxCompatible: false,
   chromeVersion: 26,
   firefoxVersion: 22,
 
@@ -1236,13 +1236,14 @@ function Peer(id, options) {
     this.id = id;
     this._init();
   } else {
-    this._getId();
+    this.id = null;
+    this._retrieveId();
   }
 };
 
 util.inherits(Peer, EventEmitter);
 
-Peer.prototype._getId = function(cb) {  
+Peer.prototype._retrieveId = function(cb) {  
   var self = this;
   try {
     var http = new XMLHttpRequest();
@@ -1253,6 +1254,10 @@ Peer.prototype._getId = function(cb) {
     http.open('get', url, true);
     http.onreadystatechange = function() {
       if (http.readyState === 4) {
+        if (http.status !== 200) {
+          throw 'Retrieve id response not 200';
+          return;
+        }
         self.id = http.responseText;
         self._init();
       }
@@ -1287,12 +1292,6 @@ Peer.prototype._handleServerJSONMessage = function(message) {
   var peer = message.src;
   var manager = this.managers[peer];
   var payload = message.payload;
-
-  // Check that browsers match.
-  if (!!payload && !!payload.browserisms && payload.browserisms !== util.browserisms) {
-    this._warn('incompatible-peer', 'Peer ' + self.peer + ' is on an incompatible browser. Please clean up this peer.');
-  }
-
   switch (message.type) {
     case 'OPEN':
       this._processQueue();
@@ -1317,7 +1316,7 @@ Peer.prototype._handleServerJSONMessage = function(message) {
         manager = new ConnectionManager(this.id, peer, this._socket, options);
         this._attachManagerListeners(manager);
         this.managers[peer] = manager;
-        this.connections[peer] = {};
+        this.connections[peer] = manager.connections;
       }
       manager.update(options.labels);
       manager.handleSDP(payload.sdp, message.type);
@@ -1347,11 +1346,10 @@ Peer.prototype._handleServerJSONMessage = function(message) {
       this._abort('invalid-key', 'API KEY "' + this._key + '" is invalid');
       break;
     case 'PORT':
-      // Firefoxism: exchanging ports.
-      if (util.browserisms === 'Firefox' && manager) {
-        manager.handlePort(payload);
-        break;
-      }
+      //if (util.browserisms === 'Firefox') {
+      //  connection.handlePort(payload);
+      //  break;
+      //}
     default:
       util.log('Unrecognized message type:', message.type);
       break;
@@ -1371,13 +1369,13 @@ Peer.prototype._attachManagerListeners = function(manager) {
   var self = this;
   // Handle receiving a connection.
   manager.on('connection', function(connection) {
-    self.connections[connection.peer][connection.label] = connection;
     self.emit('connection', connection);
   });
   // Handle a connection closing.
   manager.on('close', function() {
     if (!!self.managers[manager.peer]) {
-      delete self.managers[manager.peer]
+      delete self.managers[manager.peer];
+      delete self.connections[manager.peer];
     }
   });
   manager.on('error', function(err) {
@@ -1392,24 +1390,16 @@ Peer.prototype._abort = function(type, message) {
   this.destroy();
   this.emit('error', err);
 };
-/** Emits an error message that things may not work. */
-Peer.prototype._warn = function(type, message) {
-  var err = new Error(message);
-  err.type = type;
-  this.emit('error', err);
-};
 
 Peer.prototype._cleanup = function() {
   var self = this;
-  if (!!this.managers) {
-    var peers = Object.keys(this.managers);
-    for (var i = 0, ii = peers.length; i < ii; i++) {
-      this.managers[peers[i]].close();
-    }
-    util.setZeroTimeout(function(){
-      self.disconnect();
-    });
+  var peers = Object.keys(this.managers);
+  for (var i = 0, ii = peers.length; i < ii; i++) {
+    this.managers[peers[i]].close();
   }
+  util.setZeroTimeout(function(){
+    self.disconnect();
+  });
   this.emit('close');
 };
 
@@ -1419,14 +1409,15 @@ Peer.prototype._cleanup = function() {
  * is waiting for an ID. */
 Peer.prototype.connect = function(peer, options) {
   if (this.disconnected) {
-    this._warn('server-disconnected', 'This Peer has been disconnected from the server and can no longer make connections.');
+    var err = new Error('This Peer has been disconnected from the server and can no longer make connections.');
+    err.type = 'server-disconnected';
+    this.emit('error', err);
     return;
   }
 
   options = util.extend({
     config: this._options.config
   }, options);
-  options.originator = true;
 
   var manager = this.managers[peer];
   if (!manager) {
@@ -1436,15 +1427,20 @@ Peer.prototype.connect = function(peer, options) {
     this.connections[peer] = {};
   }
 
-  var connectionInfo = manager.connect(options);
-  if (!!connectionInfo) {
-    this.connections[peer][connectionInfo[0]] = connectionInfo[1];
-  }
+  var connection = manager.connect(options);
 
   if (!this.id) {
     this._queued.push(manager);
   }
-  return connectionInfo[1];
+  return connection;
+};
+
+/**
+ * Return the peer id or null, if there's no id at the moment.
+ * Reasons for no id could be 'connect in progress' or 'disconnected'
+ */
+Peer.prototype.getId = function() {
+  return this.id;
 };
 
 /**
@@ -1469,10 +1465,25 @@ Peer.prototype.destroy = function() {
 Peer.prototype.disconnect = function() {
   if (!this.disconnected) {
     this._socket.close();
+    this.id = null;
     this.disconnected = true;
   }
 };
 
+/**
+ * Provides a clean method for checking if there's an active connection to the
+ * peer server.
+ */
+Peer.prototype.isConnected = function() {
+  return !this.disconnected;
+};
+
+/**
+ * Returns true if this peer is destroyed and can no longer be used.
+ */
+Peer.prototype.isDestroyed = function() {
+  return this.destroyed;
+};
 
 exports.Peer = Peer;
 /**
@@ -1491,12 +1502,10 @@ function DataConnection(peer, dc, options) {
   this.open = false;
 
   this.label = options.label;
-  // Firefox is not this finely configurable.
   this.metadata = options.metadata;
-  this.serialization = util.browserisms !== 'Firefox' ? options.serialization : 'binary';
-  this._isReliable = util.browserisms !== 'Firefox' ? options.reliable : false;
-
+  this.serialization = options.serialization;
   this.peer = peer;
+  this._isReliable = options.reliable;
 
   this._dc = dc;
   if (!!this._dc) {
@@ -1507,7 +1516,6 @@ function DataConnection(peer, dc, options) {
 util.inherits(DataConnection, EventEmitter);
 
 DataConnection.prototype._configureDataChannel = function() {
-  util.log('Configuring DataChannel with peer ' + this.peer);
   var self = this;
   if (util.browserisms !== 'Webkit') {
     this._dc.binaryType = 'arraybuffer';
@@ -1619,6 +1627,37 @@ DataConnection.prototype.send = function(data) {
     }
   }
 };
+
+/**
+ * Returns true if the DataConnection is open and able to send messages.
+ */
+DataConnection.prototype.isOpen = function() {
+  return this.open;
+};
+
+/**
+ * Gets the metadata associated with this DataConnection.
+ */
+DataConnection.prototype.getMetadata = function() {
+  return this.metadata;
+};
+
+/**
+ * Gets the label associated with this DataConnection.
+ */
+DataConnection.prototype.getLabel = function() {
+  return this.label;
+};
+
+/**
+ * Gets the brokering ID of the peer that you are connected with.
+ * Note that this ID may be out of date if the peer has disconnected from the
+ *  server, so it's not recommended that you use this ID to identify this
+ *  connection.
+ */
+DataConnection.prototype.getPeer = function() {
+  return this.peer;
+};
 /**
  * Manages DataConnections between its peer and one other peer.
  * Internally, manages PeerConnection.
@@ -1666,78 +1705,23 @@ ConnectionManager.prototype.initialize = function(id, socket) {
     this._socket = socket;
   }
 
-  // Firefoxism where ports need to be generated.
-  if (util.browserisms === 'Firefox') {
-    this._firefoxPortSetup();
-  }
-
   // Set up PeerConnection.
   this._startPeerConnection();
 
   // Process queued DCs.
-  if (util.browserisms !== 'Firefox') {
-    this._processQueue();
-  }
+  this._processQueue();
 
   // Listen for ICE candidates.
   this._setupIce();
 
+  // Listen for negotiation needed.
+  // Chrome only **
+  this._setupNegotiationHandler();
+
   // Listen for data channel.
   this._setupDataChannel();
 
-  // Listen for negotiation needed.
-  // Chrome only--Firefox instead has to manually makeOffer.
-  if (util.browserisms !== 'Firefox') {
-    this._setupNegotiationHandler();
-  } else if (this._options.originator) {
-    this._firefoxHandlerSetup()
-    this._firefoxAdditional()
-  }
-
   this.initialize = function() { };
-};
-
-/** Firefoxism that requires a fake media stream. */
-ConnectionManager.prototype._firefoxAdditional = function() {
-  util.log('Additional media stream for Firefox.');
-  var self = this;
-  getUserMedia({ audio: true, fake: true }, function(s) {
-    self.pc.addStream(s);
-    if (self._options.originator) {
-      self._makeOffer();
-    } else {
-      self._makeAnswer();
-    }
-  }, function(err) { util.log('Could not getUserMedia'); });
-};
-
-/** Firefoxism that requires ports to be set up. */
-ConnectionManager.prototype._firefoxPortSetup = function() {
-  if (!ConnectionManager.usedPorts) {
-    ConnectionManager.usedPorts = [];
-  }
-  this._localPort = util.randomPort();
-  while (ConnectionManager.usedPorts.indexOf(this._localPort) != -1) {
-    this._localPort = util.randomPort();
-  }
-  this._remotePort = util.randomPort();
-  while (this._remotePort === this._localPort ||
-      ConnectionManager.usedPorts.indexOf(this._remotePort) != -1) {
-    this._remotePort = util.randomPort();
-  }
-  ConnectionManager.usedPorts.push(this._remotePort);
-  ConnectionManager.usedPorts.push(this._localPort);
-};
-
-/** Firefoxism that is `onconnection`. */
-ConnectionManager.prototype._firefoxHandlerSetup = function() {
-  util.log('Setup Firefox `onconnection`.');
-  var self = this;
-  this.pc.onconnection = function() {
-    util.log('FIREFOX: onconnection triggered');
-
-    self._processQueue();
-  }
 };
 
 /** Start a PC. */
@@ -1770,6 +1754,19 @@ ConnectionManager.prototype._setupIce = function() {
       });
     }
   };
+  this.pc.oniceconnectionstatechange = function() {
+    if (!!self.pc && self.pc.iceConnectionState === 'disconnected') {
+      util.log('iceConnectionState is disconnected, closing connections to ' + this.peer);
+      self.close();
+    }
+  };
+  // Fallback for older Chrome impls.
+  this.pc.onicechange = function() {
+    if (!!self.pc && self.pc.iceConnectionState === 'disconnected') {
+      util.log('iceConnectionState is disconnected, closing connections to ' + this.peer);
+      self.close();
+    }
+  };
 };
 
 /** Set up onnegotiationneeded. */
@@ -1788,17 +1785,11 @@ ConnectionManager.prototype._setupDataChannel = function() {
   util.log('Listening for data channel');
   this.pc.ondatachannel = function(evt) {
     util.log('Received data channel');
-    // Firefoxism: ondatachannel receives channel directly. NOT TO SPEC.
-    var dc = util.browserisms === 'Firefox' ? evt : evt.channel;
+    var dc = evt.channel;
     var label = dc.label;
-
     // This should not be empty.
-    // NOTE: Multiple DCs are currently not configurable in FF. Will have to
-    // come up with reasonable defaults.
-    var options = self.labels[label] || { label: label };
+    var options = self.labels[label] || {};
     var connection  = new DataConnection(self.peer, dc, options);
-    delete self.labels[label];
-
     self._attachConnectionListeners(connection);
     self.connections[label] = connection;
     self.emit('connection', connection);
@@ -1815,7 +1806,6 @@ ConnectionManager.prototype._makeOffer = function() {
       self._socket.send({
         type: 'OFFER',
         payload: {
-          browserisms: util.browserisms,
           sdp: offer,
           config: self._options.config,
           labels: self.labels
@@ -1841,7 +1831,6 @@ ConnectionManager.prototype._makeAnswer = function() {
       self._socket.send({
         type: 'ANSWER',
         payload: {
-          browserisms: util.browserisms,
           sdp: answer
         },
         dst: self.peer
@@ -1859,7 +1848,7 @@ ConnectionManager.prototype._makeAnswer = function() {
 /** Clean up PC, close related DCs. */
 ConnectionManager.prototype._cleanup = function() {
   util.log('Cleanup ConnectionManager for ' + this.peer);
-  if (!!this.pc && this.pc.readyState !== 'closed') {
+  if (!!this.pc && (this.pc.readyState !== 'closed' || this.pc.signalingState !== 'closed')) {
     this.pc.close();
     this.pc = null;
   }
@@ -1892,45 +1881,15 @@ ConnectionManager.prototype._attachConnectionListeners = function(connection) {
   });
 };
 
-/** Firefoxism: handle receiving a set of ports. */
-ConnectionManager.prototype.handlePort = function(ports) {
-  util.log('Received ports, calling connectDataConnection.');
-  if (!ConnectionManager.usedPorts) {
-    ConnectionManager.usedPorts = [];
-  }
-  ConnectionManager.usedPorts.push(ports.local);
-  ConnectionManager.usedPorts.push(ports.remote);
-  this.pc.connectDataConnection(ports.local, ports.remote);
-};
-
 /** Handle an SDP. */
 ConnectionManager.prototype.handleSDP = function(sdp, type) {
-  if (util.browserisms !== 'Firefox') {
-    // Doesn't need to happen for FF.
-    sdp = new RTCSessionDescription(sdp);
-  }
+  sdp = new RTCSessionDescription(sdp);
 
   var self = this;
   this.pc.setRemoteDescription(sdp, function() {
     util.log('Set remoteDescription: ' + type);
     if (type === 'OFFER') {
-      if (util.browserisms === 'Firefox') {
-        self._firefoxAdditional();
-      } else {
-        self._makeAnswer();
-      }
-    } else if (util.browserisms === 'Firefox') {
-      // Firefoxism.
-      util.log('Peer ANSWER received, connectDataConnection called.');
-      self.pc.connectDataConnection(self._localPort, self._remotePort);
-      self._socket.send({
-        type: 'PORT',
-        payload: {
-          remote: self._localPort,
-          local: self._remotePort
-        },
-        dst: self.peer
-      });
+      self._makeAnswer();
     }
   }, function(err) {
     self.emit('error', err);
@@ -1987,19 +1946,19 @@ ConnectionManager.prototype.connect = function(options) {
   this.labels[options.label] = options;
 
   var dc;
-  if (!!this.pc && !this._lock && (util.browserisms !== 'Firefox' || Object.keys(this.connections).length !== 0)) {
+  if (!!this.pc && !this._lock) {
     dc = this.pc.createDataChannel(options.label, { reliable: false });
   }
   var connection = new DataConnection(this.peer, dc, options);
   this._attachConnectionListeners(connection);
   this.connections[options.label] = connection;
 
-  if (!dc) {
+  if (!this.pc || this._lock) {
     this._queued.push(connection);
   }
 
   this._lock = true
-  return [options.label, connection];
+  return connection;
 };
 
 /** Updates label:[serialization, reliable, metadata] pairs from offer. */
