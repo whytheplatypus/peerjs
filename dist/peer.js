@@ -1498,11 +1498,15 @@ Peer.prototype.connect = function(peer, options) {
   }
 
   var connection = manager.connect(options);
-
+  
+  if (!!connection) {
+    this.connections[peer][connection.label] = connection;
+    this.emit('connection', connection);
+  }
   if (!this.id) {
     this._queued.push(manager);
   }
-  this.emit('connection', connection);
+
   return connection;
 };
 
@@ -1558,7 +1562,7 @@ Peer.prototype.isDestroyed = function() {
 
 module.exports = Peer;
 
-},{"events":6,"./connectionmanager":8,"./util":7,"./socket":9}],7:[function(require,module,exports){
+},{"events":6,"./util":7,"./connectionmanager":8,"./socket":9}],7:[function(require,module,exports){
 (function(){var BinaryPack = require('../deps/js-binarypack/dist/binarypack.js').BinaryPack
 var util = {
   
