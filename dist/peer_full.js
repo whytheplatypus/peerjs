@@ -1,12 +1,266 @@
-(function(e){if("function"==typeof bootstrap)bootstrap("peer",e);else if("object"==typeof exports)module.exports=e();else if("function"==typeof define&&define.amd)define(e);else if("undefined"!=typeof ses){if(!ses.ok())return;ses.makePeer=e}else"undefined"!=typeof window?window.Peer=e():global.Peer=e()})(function(){var define,ses,bootstrap,module,exports;
+(function(e){if("function"==typeof bootstrap)bootstrap("peerjs",e);else if("object"==typeof exports)module.exports=e();else if("function"==typeof define&&define.amd)define(e);else if("undefined"!=typeof ses){if(!ses.ok())return;ses.makePeerjs=e}else"undefined"!=typeof window?window.peerjs=e():global.peerjs=e()})(function(){var define,ses,bootstrap,module,exports;
 return (function(e,t,n){function i(n,s){if(!t[n]){if(!e[n]){var o=typeof require=="function"&&require;if(!s&&o)return o(n,!0);if(r)return r(n,!0);throw new Error("Cannot find module '"+n+"'")}var u=t[n]={exports:{}};e[n][0].call(u.exports,function(t){var r=e[n][1][t];return i(r?r:t)},u,u.exports)}return t[n].exports}var r=typeof require=="function"&&require;for(var s=0;s<n.length;s++)i(n[s]);return i})({1:[function(require,module,exports){
+// shim for using process in browser
+
+var process = module.exports = {};
+
+process.nextTick = (function () {
+    var canSetImmediate = typeof window !== 'undefined'
+    && window.setImmediate;
+    var canPost = typeof window !== 'undefined'
+    && window.postMessage && window.addEventListener
+    ;
+
+    if (canSetImmediate) {
+        return function (f) { return window.setImmediate(f) };
+    }
+
+    if (canPost) {
+        var queue = [];
+        window.addEventListener('message', function (ev) {
+            if (ev.source === window && ev.data === 'process-tick') {
+                ev.stopPropagation();
+                if (queue.length > 0) {
+                    var fn = queue.shift();
+                    fn();
+                }
+            }
+        }, true);
+
+        return function nextTick(fn) {
+            queue.push(fn);
+            window.postMessage('process-tick', '*');
+        };
+    }
+
+    return function nextTick(fn) {
+        setTimeout(fn, 0);
+    };
+})();
+
+process.title = 'browser';
+process.browser = true;
+process.env = {};
+process.argv = [];
+
+process.binding = function (name) {
+    throw new Error('process.binding is not supported');
+}
+
+// TODO(shtylman)
+process.cwd = function () { return '/' };
+process.chdir = function (dir) {
+    throw new Error('process.chdir is not supported');
+};
+
+},{}],2:[function(require,module,exports){
+(function(process){if (!process.EventEmitter) process.EventEmitter = function () {};
+
+var EventEmitter = exports.EventEmitter = process.EventEmitter;
+var isArray = typeof Array.isArray === 'function'
+    ? Array.isArray
+    : function (xs) {
+        return Object.prototype.toString.call(xs) === '[object Array]'
+    }
+;
+function indexOf (xs, x) {
+    if (xs.indexOf) return xs.indexOf(x);
+    for (var i = 0; i < xs.length; i++) {
+        if (x === xs[i]) return i;
+    }
+    return -1;
+}
+
+// By default EventEmitters will print a warning if more than
+// 10 listeners are added to it. This is a useful default which
+// helps finding memory leaks.
+//
+// Obviously not all Emitters should be limited to 10. This function allows
+// that to be increased. Set to zero for unlimited.
+var defaultMaxListeners = 10;
+EventEmitter.prototype.setMaxListeners = function(n) {
+  if (!this._events) this._events = {};
+  this._events.maxListeners = n;
+};
+
+
+EventEmitter.prototype.emit = function(type) {
+  // If there is no 'error' event listener then throw.
+  if (type === 'error') {
+    if (!this._events || !this._events.error ||
+        (isArray(this._events.error) && !this._events.error.length))
+    {
+      if (arguments[1] instanceof Error) {
+        throw arguments[1]; // Unhandled 'error' event
+      } else {
+        throw new Error("Uncaught, unspecified 'error' event.");
+      }
+      return false;
+    }
+  }
+
+  if (!this._events) return false;
+  var handler = this._events[type];
+  if (!handler) return false;
+
+  if (typeof handler == 'function') {
+    switch (arguments.length) {
+      // fast cases
+      case 1:
+        handler.call(this);
+        break;
+      case 2:
+        handler.call(this, arguments[1]);
+        break;
+      case 3:
+        handler.call(this, arguments[1], arguments[2]);
+        break;
+      // slower
+      default:
+        var args = Array.prototype.slice.call(arguments, 1);
+        handler.apply(this, args);
+    }
+    return true;
+
+  } else if (isArray(handler)) {
+    var args = Array.prototype.slice.call(arguments, 1);
+
+    var listeners = handler.slice();
+    for (var i = 0, l = listeners.length; i < l; i++) {
+      listeners[i].apply(this, args);
+    }
+    return true;
+
+  } else {
+    return false;
+  }
+};
+
+// EventEmitter is defined in src/node_events.cc
+// EventEmitter.prototype.emit() is also defined there.
+EventEmitter.prototype.addListener = function(type, listener) {
+  if ('function' !== typeof listener) {
+    throw new Error('addListener only takes instances of Function');
+  }
+
+  if (!this._events) this._events = {};
+
+  // To avoid recursion in the case that type == "newListeners"! Before
+  // adding it to the listeners, first emit "newListeners".
+  this.emit('newListener', type, listener);
+
+  if (!this._events[type]) {
+    // Optimize the case of one listener. Don't need the extra array object.
+    this._events[type] = listener;
+  } else if (isArray(this._events[type])) {
+
+    // Check for listener leak
+    if (!this._events[type].warned) {
+      var m;
+      if (this._events.maxListeners !== undefined) {
+        m = this._events.maxListeners;
+      } else {
+        m = defaultMaxListeners;
+      }
+
+      if (m && m > 0 && this._events[type].length > m) {
+        this._events[type].warned = true;
+        console.error('(node) warning: possible EventEmitter memory ' +
+                      'leak detected. %d listeners added. ' +
+                      'Use emitter.setMaxListeners() to increase limit.',
+                      this._events[type].length);
+        console.trace();
+      }
+    }
+
+    // If we've already got an array, just append.
+    this._events[type].push(listener);
+  } else {
+    // Adding the second element, need to change to array.
+    this._events[type] = [this._events[type], listener];
+  }
+
+  return this;
+};
+
+EventEmitter.prototype.on = EventEmitter.prototype.addListener;
+
+EventEmitter.prototype.once = function(type, listener) {
+  var self = this;
+  self.on(type, function g() {
+    self.removeListener(type, g);
+    listener.apply(this, arguments);
+  });
+
+  return this;
+};
+
+EventEmitter.prototype.removeListener = function(type, listener) {
+  if ('function' !== typeof listener) {
+    throw new Error('removeListener only takes instances of Function');
+  }
+
+  // does not use listeners(), so no side effect of creating _events[type]
+  if (!this._events || !this._events[type]) return this;
+
+  var list = this._events[type];
+
+  if (isArray(list)) {
+    var i = indexOf(list, listener);
+    if (i < 0) return this;
+    list.splice(i, 1);
+    if (list.length == 0)
+      delete this._events[type];
+  } else if (this._events[type] === listener) {
+    delete this._events[type];
+  }
+
+  return this;
+};
+
+EventEmitter.prototype.removeAllListeners = function(type) {
+  if (arguments.length === 0) {
+    this._events = {};
+    return this;
+  }
+
+  // does not use listeners(), so no side effect of creating _events[type]
+  if (type && this._events && this._events[type]) this._events[type] = null;
+  return this;
+};
+
+EventEmitter.prototype.listeners = function(type) {
+  if (!this._events) this._events = {};
+  if (!this._events[type]) this._events[type] = [];
+  if (!isArray(this._events[type])) {
+    this._events[type] = [this._events[type]];
+  }
+  return this._events[type];
+};
+
+})(require("__browserify_process"))
+},{"__browserify_process":1}],3:[function(require,module,exports){
 require('./adapter');
 require('../deps/reliable/dist/reliable.js');
 
+var util = require('./util');
+
+var EventEmitter = require('events').EventEmitter;
+var DataConnection = require('./dataconnection');
+var ConnectionManager = require('./connectionmanager');
 var Peer = require('./peer');
 
-module.exports = Peer;
-},{"../deps/reliable/dist/reliable.js":2,"./adapter":3,"./peer":4}],2:[function(require,module,exports){
+
+
+
+module.exports = {
+	DataConnection: DataConnection,
+	ConnectionManager: ConnectionManager,
+	util: util,
+	EventEmitter: EventEmitter,
+	Peer: Peer
+};
+},{"events":2,"../deps/reliable/dist/reliable.js":4,"./adapter":5,"./util":6,"./dataconnection":7,"./connectionmanager":8,"./peer":9}],4:[function(require,module,exports){
 (function(){/*! reliable.js build:0.1.0, development. Copyright(c) 2013 Michelle Bu <michelle@michellebu.com> */
 (function(exports){
 var binaryFeatures = {};
@@ -971,247 +1225,136 @@ exports.Reliable = Reliable;
 })(this);
 
 })()
-},{}],5:[function(require,module,exports){
-// shim for using process in browser
-
-var process = module.exports = {};
-
-process.nextTick = (function () {
-    var canSetImmediate = typeof window !== 'undefined'
-    && window.setImmediate;
-    var canPost = typeof window !== 'undefined'
-    && window.postMessage && window.addEventListener
-    ;
-
-    if (canSetImmediate) {
-        return function (f) { return window.setImmediate(f) };
-    }
-
-    if (canPost) {
-        var queue = [];
-        window.addEventListener('message', function (ev) {
-            if (ev.source === window && ev.data === 'process-tick') {
-                ev.stopPropagation();
-                if (queue.length > 0) {
-                    var fn = queue.shift();
-                    fn();
-                }
-            }
-        }, true);
-
-        return function nextTick(fn) {
-            queue.push(fn);
-            window.postMessage('process-tick', '*');
-        };
-    }
-
-    return function nextTick(fn) {
-        setTimeout(fn, 0);
-    };
-})();
-
-process.title = 'browser';
-process.browser = true;
-process.env = {};
-process.argv = [];
-
-process.binding = function (name) {
-    throw new Error('process.binding is not supported');
-}
-
-// TODO(shtylman)
-process.cwd = function () { return '/' };
-process.chdir = function (dir) {
-    throw new Error('process.chdir is not supported');
-};
-
 },{}],6:[function(require,module,exports){
-(function(process){if (!process.EventEmitter) process.EventEmitter = function () {};
+(function(){var BinaryPack = require('../deps/js-binarypack/dist/binarypack.js').BinaryPack
+var util = {
+  
+  chromeCompatible: true,
+  firefoxCompatible: false,
+  chromeVersion: 26,
+  firefoxVersion: 22,
 
-var EventEmitter = exports.EventEmitter = process.EventEmitter;
-var isArray = typeof Array.isArray === 'function'
-    ? Array.isArray
-    : function (xs) {
-        return Object.prototype.toString.call(xs) === '[object Array]'
-    }
-;
-function indexOf (xs, x) {
-    if (xs.indexOf) return xs.indexOf(x);
-    for (var i = 0; i < xs.length; i++) {
-        if (x === xs[i]) return i;
-    }
-    return -1;
-}
-
-// By default EventEmitters will print a warning if more than
-// 10 listeners are added to it. This is a useful default which
-// helps finding memory leaks.
-//
-// Obviously not all Emitters should be limited to 10. This function allows
-// that to be increased. Set to zero for unlimited.
-var defaultMaxListeners = 10;
-EventEmitter.prototype.setMaxListeners = function(n) {
-  if (!this._events) this._events = {};
-  this._events.maxListeners = n;
-};
-
-
-EventEmitter.prototype.emit = function(type) {
-  // If there is no 'error' event listener then throw.
-  if (type === 'error') {
-    if (!this._events || !this._events.error ||
-        (isArray(this._events.error) && !this._events.error.length))
-    {
-      if (arguments[1] instanceof Error) {
-        throw arguments[1]; // Unhandled 'error' event
-      } else {
-        throw new Error("Uncaught, unspecified 'error' event.");
+  debug: false,
+  browserisms: '',
+  
+  inherits: function(ctor, superCtor) {
+    ctor.super_ = superCtor;
+    ctor.prototype = Object.create(superCtor.prototype, {
+      constructor: {
+        value: ctor,
+        enumerable: false,
+        writable: true,
+        configurable: true
       }
-      return false;
+    });
+  },
+  extend: function(dest, source) {
+    for(var key in source) {
+      if(source.hasOwnProperty(key)) {
+        dest[key] = source[key];
+      }
     }
-  }
-
-  if (!this._events) return false;
-  var handler = this._events[type];
-  if (!handler) return false;
-
-  if (typeof handler == 'function') {
-    switch (arguments.length) {
-      // fast cases
-      case 1:
-        handler.call(this);
-        break;
-      case 2:
-        handler.call(this, arguments[1]);
-        break;
-      case 3:
-        handler.call(this, arguments[1], arguments[2]);
-        break;
-      // slower
-      default:
-        var args = Array.prototype.slice.call(arguments, 1);
-        handler.apply(this, args);
+    return dest;
+  },
+  pack: BinaryPack.pack,
+  unpack: BinaryPack.unpack,
+  randomPort: function() {
+    return Math.round(Math.random() * 60535) + 5000;
+  },
+  
+  log: function () {
+    if (util.debug) {
+      var err = false;
+      var copy = Array.prototype.slice.call(arguments);
+      copy.unshift('PeerJS: ');
+      for (var i = 0, l = copy.length; i < l; i++){
+        if (copy[i] instanceof Error) {
+          copy[i] = '(' + copy[i].name + ') ' + copy[i].message;
+          err = true;
+        }
+      }
+      err ? console.error.apply(console, copy) : console.log.apply(console, copy);
     }
-    return true;
+  },
 
-  } else if (isArray(handler)) {
-    var args = Array.prototype.slice.call(arguments, 1);
+  setZeroTimeout: (function(global) {
+    var timeouts = [];
+    var messageName = 'zero-timeout-message';
 
-    var listeners = handler.slice();
-    for (var i = 0, l = listeners.length; i < l; i++) {
-      listeners[i].apply(this, args);
+    // Like setTimeout, but only takes a function argument.	 There's
+    // no time argument (always zero) and no arguments (you have to
+    // use a closure).
+    function setZeroTimeoutPostMessage(fn) {
+      timeouts.push(fn);
+      global.postMessage(messageName, '*');
+    }		
+
+    function handleMessage(event) {
+      if (event.source == global && event.data == messageName) {
+        if (event.stopPropagation) {
+          event.stopPropagation();
+        }
+        if (timeouts.length) {
+          timeouts.shift()();
+        }
+      }
     }
-    return true;
-
-  } else {
+    if (global.addEventListener) {
+      global.addEventListener('message', handleMessage, true);
+    } else if (global.attachEvent) {
+      global.attachEvent('onmessage', handleMessage);
+    }
+    return setZeroTimeoutPostMessage;
+  }(this)),
+  
+  blobToArrayBuffer: function(blob, cb){
+    var fr = new FileReader();
+    fr.onload = function(evt) {
+      cb(evt.target.result);
+    };
+    fr.readAsArrayBuffer(blob);
+  },
+  blobToBinaryString: function(blob, cb){
+    var fr = new FileReader();
+    fr.onload = function(evt) {
+      cb(evt.target.result);
+    };
+    fr.readAsBinaryString(blob);
+  },
+  binaryStringToArrayBuffer: function(binary) {
+    var byteArray = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) {
+      byteArray[i] = binary.charCodeAt(i) & 0xff;
+    }
+    return byteArray.buffer;
+  },
+  randomToken: function () {
+    return Math.random().toString(36).substr(2);
+  },
+  isBrowserCompatible: function() {
+    var c, f;
+    if (this.chromeCompatible) {
+      if ((c = navigator.userAgent.split('Chrome/')) && c.length > 1) {
+        // Get version #.
+        var v = c[1].split('.')[0];
+        return parseInt(v) >= this.chromeVersion;
+      }
+    }
+    if (this.firefoxCompatible) {
+      if ((f = navigator.userAgent.split('Firefox/')) && f.length > 1) {
+        // Get version #.
+        var v = f[1].split('.')[0];
+        return parseInt(v) >= this.firefoxVersion;
+      }
+    }
     return false;
   }
 };
 
-// EventEmitter is defined in src/node_events.cc
-// EventEmitter.prototype.emit() is also defined there.
-EventEmitter.prototype.addListener = function(type, listener) {
-  if ('function' !== typeof listener) {
-    throw new Error('addListener only takes instances of Function');
-  }
+module.exports = util;
 
-  if (!this._events) this._events = {};
-
-  // To avoid recursion in the case that type == "newListeners"! Before
-  // adding it to the listeners, first emit "newListeners".
-  this.emit('newListener', type, listener);
-
-  if (!this._events[type]) {
-    // Optimize the case of one listener. Don't need the extra array object.
-    this._events[type] = listener;
-  } else if (isArray(this._events[type])) {
-
-    // Check for listener leak
-    if (!this._events[type].warned) {
-      var m;
-      if (this._events.maxListeners !== undefined) {
-        m = this._events.maxListeners;
-      } else {
-        m = defaultMaxListeners;
-      }
-
-      if (m && m > 0 && this._events[type].length > m) {
-        this._events[type].warned = true;
-        console.error('(node) warning: possible EventEmitter memory ' +
-                      'leak detected. %d listeners added. ' +
-                      'Use emitter.setMaxListeners() to increase limit.',
-                      this._events[type].length);
-        console.trace();
-      }
-    }
-
-    // If we've already got an array, just append.
-    this._events[type].push(listener);
-  } else {
-    // Adding the second element, need to change to array.
-    this._events[type] = [this._events[type], listener];
-  }
-
-  return this;
-};
-
-EventEmitter.prototype.on = EventEmitter.prototype.addListener;
-
-EventEmitter.prototype.once = function(type, listener) {
-  var self = this;
-  self.on(type, function g() {
-    self.removeListener(type, g);
-    listener.apply(this, arguments);
-  });
-
-  return this;
-};
-
-EventEmitter.prototype.removeListener = function(type, listener) {
-  if ('function' !== typeof listener) {
-    throw new Error('removeListener only takes instances of Function');
-  }
-
-  // does not use listeners(), so no side effect of creating _events[type]
-  if (!this._events || !this._events[type]) return this;
-
-  var list = this._events[type];
-
-  if (isArray(list)) {
-    var i = indexOf(list, listener);
-    if (i < 0) return this;
-    list.splice(i, 1);
-    if (list.length == 0)
-      delete this._events[type];
-  } else if (this._events[type] === listener) {
-    delete this._events[type];
-  }
-
-  return this;
-};
-
-EventEmitter.prototype.removeAllListeners = function(type) {
-  if (arguments.length === 0) {
-    this._events = {};
-    return this;
-  }
-
-  // does not use listeners(), so no side effect of creating _events[type]
-  if (type && this._events && this._events[type]) this._events[type] = null;
-  return this;
-};
-
-EventEmitter.prototype.listeners = function(type) {
-  if (!this._events) this._events = {};
-  if (!this._events[type]) this._events[type] = [];
-  if (!isArray(this._events[type])) {
-    this._events[type] = [this._events[type]];
-  }
-  return this._events[type];
-};
-
-})(require("__browserify_process"))
-},{"__browserify_process":5}],3:[function(require,module,exports){
+})()
+},{"../deps/js-binarypack/dist/binarypack.js":10}],5:[function(require,module,exports){
 var util = require('./util');
 
 var RTCPeerConnection = null;
@@ -1235,7 +1378,187 @@ window.RTCSessionDescription = RTCSessionDescription;
 window.RTCPeerConnection = RTCPeerConnection;
 navigator.getUserMedia = getUserMedia;
 
-},{"./util":7}],4:[function(require,module,exports){
+},{"./util":6}],7:[function(require,module,exports){
+
+var util = require('./util');
+var EventEmitter = require('events').EventEmitter;
+
+/**
+ * Wraps a DataChannel between two Peers.
+ */
+function DataConnection(peer, dc, options) {
+  if (!(this instanceof DataConnection)) return new DataConnection(peer, dc, options);
+  EventEmitter.call(this);
+
+  options = util.extend({
+    reliable: false,
+    serialization: 'binary'
+  }, options);
+
+  // Connection is not open yet.
+  this.open = false;
+
+  this.label = options.label;
+  this.metadata = options.metadata;
+  this.serialization = options.serialization;
+  this.peer = peer;
+  this._isReliable = options.reliable;
+
+  this._dc = dc;
+  if (!!this._dc) {
+    this._configureDataChannel();
+  }
+};
+
+util.inherits(DataConnection, EventEmitter);
+
+DataConnection.prototype._configureDataChannel = function() {
+  var self = this;
+  if (util.browserisms !== 'Webkit') {
+    this._dc.binaryType = 'arraybuffer';
+  }
+  this._dc.onopen = function() {
+    util.log('Data channel connection success');
+    self.open = true;
+    self.emit('open');
+  };
+
+  // Reliable.
+  if (this._isReliable) {
+    this._reliable = new Reliable(this._dc, util.debug);
+  }
+
+  if (this._reliable) {
+    this._reliable.onmessage = function(msg) {
+      self.emit('data', msg);
+    };
+  } else {
+    this._dc.onmessage = function(e) {
+      self._handleDataMessage(e);
+    };
+  }
+  this._dc.onclose = function(e) {
+    util.log('DataChannel closed.');
+    self.close();
+  };
+
+};
+
+DataConnection.prototype._cleanup = function() {
+  if (!!this._dc && this._dc.readyState !== 'closed') {
+    this._dc.close();
+    this._dc = null;
+  }
+  this.open = false;
+  this.emit('close');
+};
+
+// Handles a DataChannel message.
+DataConnection.prototype._handleDataMessage = function(e) {
+  var self = this;
+  var data = e.data;
+  var datatype = data.constructor;
+  if (this.serialization === 'binary' || this.serialization === 'binary-utf8') {
+    if (datatype === Blob) {
+      util.blobToArrayBuffer(data, function(ab) {
+        data = util.unpack(ab);
+        self.emit('data', data);
+      });
+      return;
+    } else if (datatype === ArrayBuffer) {
+      data = util.unpack(data);
+    } else if (datatype === String) {
+      var ab = util.binaryStringToArrayBuffer(data);
+      data = util.unpack(ab);
+    }
+  } else if (this.serialization === 'json') {
+    data = JSON.parse(data);
+  }
+  this.emit('data', data);
+};
+
+DataConnection.prototype.addDC = function(dc) {
+  this._dc = dc;
+  this._configureDataChannel();
+};
+
+
+/**
+ * Exposed functionality for users.
+ */
+
+/** Allows user to close connection. */
+DataConnection.prototype.close = function() {
+  if (!this.open) {
+    return;
+  }
+  this._cleanup();
+};
+
+/** Allows user to send data. */
+DataConnection.prototype.send = function(data) {
+  if (!this.open) {
+    this.emit('error', new Error('Connection no longer open.'));
+  }
+  if (this._reliable) {
+    // Note: reliable sending will make it so that you cannot customize
+    // serialization.
+    this._reliable.send(data);
+    return;
+  }
+  var self = this;
+  if (this.serialization === 'none') {
+    this._dc.send(data);
+  } else if (this.serialization === 'json') {
+    this._dc.send(JSON.stringify(data));
+  } else {
+    var utf8 = (this.serialization === 'binary-utf8');
+    var blob = util.pack(data, utf8);
+    // DataChannel currently only supports strings.
+    if (util.browserisms === 'Webkit') {
+      util.blobToBinaryString(blob, function(str){
+        self._dc.send(str);
+      });
+    } else {
+      this._dc.send(blob);
+    }
+  }
+};
+
+/**
+ * Returns true if the DataConnection is open and able to send messages.
+ */
+DataConnection.prototype.isOpen = function() {
+  return this.open;
+};
+
+/**
+ * Gets the metadata associated with this DataConnection.
+ */
+DataConnection.prototype.getMetadata = function() {
+  return this.metadata;
+};
+
+/**
+ * Gets the label associated with this DataConnection.
+ */
+DataConnection.prototype.getLabel = function() {
+  return this.label;
+};
+
+/**
+ * Gets the brokering ID of the peer that you are connected with.
+ * Note that this ID may be out of date if the peer has disconnected from the
+ *  server, so it's not recommended that you use this ID to identify this
+ *  connection.
+ */
+DataConnection.prototype.getPeer = function() {
+  return this.peer;
+};
+
+module.exports = DataConnection;
+
+},{"events":2,"./util":6}],9:[function(require,module,exports){
 var EventEmitter = require('events').EventEmitter;
 var util = require('./util');
 var ConnectionManager = require('./connectionmanager');
@@ -1558,136 +1881,7 @@ Peer.prototype.isDestroyed = function() {
 
 module.exports = Peer;
 
-},{"events":6,"./connectionmanager":8,"./util":7,"./socket":9}],7:[function(require,module,exports){
-(function(){var BinaryPack = require('../deps/js-binarypack/dist/binarypack.js').BinaryPack
-var util = {
-  
-  chromeCompatible: true,
-  firefoxCompatible: false,
-  chromeVersion: 26,
-  firefoxVersion: 22,
-
-  debug: false,
-  browserisms: '',
-  
-  inherits: function(ctor, superCtor) {
-    ctor.super_ = superCtor;
-    ctor.prototype = Object.create(superCtor.prototype, {
-      constructor: {
-        value: ctor,
-        enumerable: false,
-        writable: true,
-        configurable: true
-      }
-    });
-  },
-  extend: function(dest, source) {
-    for(var key in source) {
-      if(source.hasOwnProperty(key)) {
-        dest[key] = source[key];
-      }
-    }
-    return dest;
-  },
-  pack: BinaryPack.pack,
-  unpack: BinaryPack.unpack,
-  randomPort: function() {
-    return Math.round(Math.random() * 60535) + 5000;
-  },
-  
-  log: function () {
-    if (util.debug) {
-      var err = false;
-      var copy = Array.prototype.slice.call(arguments);
-      copy.unshift('PeerJS: ');
-      for (var i = 0, l = copy.length; i < l; i++){
-        if (copy[i] instanceof Error) {
-          copy[i] = '(' + copy[i].name + ') ' + copy[i].message;
-          err = true;
-        }
-      }
-      err ? console.error.apply(console, copy) : console.log.apply(console, copy);
-    }
-  },
-
-  setZeroTimeout: (function(global) {
-    var timeouts = [];
-    var messageName = 'zero-timeout-message';
-
-    // Like setTimeout, but only takes a function argument.	 There's
-    // no time argument (always zero) and no arguments (you have to
-    // use a closure).
-    function setZeroTimeoutPostMessage(fn) {
-      timeouts.push(fn);
-      global.postMessage(messageName, '*');
-    }		
-
-    function handleMessage(event) {
-      if (event.source == global && event.data == messageName) {
-        if (event.stopPropagation) {
-          event.stopPropagation();
-        }
-        if (timeouts.length) {
-          timeouts.shift()();
-        }
-      }
-    }
-    if (global.addEventListener) {
-      global.addEventListener('message', handleMessage, true);
-    } else if (global.attachEvent) {
-      global.attachEvent('onmessage', handleMessage);
-    }
-    return setZeroTimeoutPostMessage;
-  }(this)),
-  
-  blobToArrayBuffer: function(blob, cb){
-    var fr = new FileReader();
-    fr.onload = function(evt) {
-      cb(evt.target.result);
-    };
-    fr.readAsArrayBuffer(blob);
-  },
-  blobToBinaryString: function(blob, cb){
-    var fr = new FileReader();
-    fr.onload = function(evt) {
-      cb(evt.target.result);
-    };
-    fr.readAsBinaryString(blob);
-  },
-  binaryStringToArrayBuffer: function(binary) {
-    var byteArray = new Uint8Array(binary.length);
-    for (var i = 0; i < binary.length; i++) {
-      byteArray[i] = binary.charCodeAt(i) & 0xff;
-    }
-    return byteArray.buffer;
-  },
-  randomToken: function () {
-    return Math.random().toString(36).substr(2);
-  },
-  isBrowserCompatible: function() {
-    var c, f;
-    if (this.chromeCompatible) {
-      if ((c = navigator.userAgent.split('Chrome/')) && c.length > 1) {
-        // Get version #.
-        var v = c[1].split('.')[0];
-        return parseInt(v) >= this.chromeVersion;
-      }
-    }
-    if (this.firefoxCompatible) {
-      if ((f = navigator.userAgent.split('Firefox/')) && f.length > 1) {
-        // Get version #.
-        var v = f[1].split('.')[0];
-        return parseInt(v) >= this.firefoxVersion;
-      }
-    }
-    return false;
-  }
-};
-
-module.exports = util;
-
-})()
-},{"../deps/js-binarypack/dist/binarypack.js":10}],8:[function(require,module,exports){
+},{"events":2,"./util":6,"./connectionmanager":8,"./socket":11}],8:[function(require,module,exports){
 var util = require('./util');
 var DataConnection = require('./dataconnection');
 var EventEmitter = require('events').EventEmitter;
@@ -2007,191 +2201,7 @@ ConnectionManager.prototype.update = function(updates) {
 
 module.exports = ConnectionManager;
 
-},{"events":6,"./util":7,"./dataconnection":11}],9:[function(require,module,exports){
-var EventEmitter = require('events').EventEmitter;
-var util = require('./util');
-
-/**
- * An abstraction on top of WebSockets and XHR streaming to provide fastest
- * possible connection for peers.
- */
-function Socket(host, port, key, id) {
-  if (!(this instanceof Socket)) return new Socket(host, port, key, id);
-  EventEmitter.call(this);
-  
-  this._id = id;
-  var token = util.randomToken();
-
-  this.disconnected = false;
-  
-  this._httpUrl = 'http://' + host + ':' + port + '/' + key + '/' + id + '/' + token;
-  this._wsUrl = 'ws://' + host + ':' + port + '/peerjs?key='+key+'&id='+id+'&token='+token;
-};
-
-util.inherits(Socket, EventEmitter);
-
-
-/** Check in with ID or get one from server. */
-Socket.prototype.start = function() {  
-  this._startXhrStream();
-  this._startWebSocket();
-};
-
-
-/** Start up websocket communications. */
-Socket.prototype._startWebSocket = function() {
-  var self = this;
-
-  if (!!this._socket) {
-    return;
-  }
-
-  this._socket = new WebSocket(this._wsUrl);
-  
-  this._socket.onmessage = function(event) {
-    var data;
-    try {
-      data = JSON.parse(event.data);
-    } catch(e) {
-      util.log('Invalid server message', event.data);
-      return;
-    }
-    self.emit('message', data);
-  };
-
-  // Take care of the queue of connections if necessary and make sure Peer knows
-  // socket is open.
-  this._socket.onopen = function() {
-    if (!!self._timeout) {
-      clearTimeout(self._timeout);
-      setTimeout(function(){
-        self._http.abort();
-        self._http = null;
-      }, 5000);
-    }
-    util.log('Socket open');
-  };
-};
-
-/** Start XHR streaming. */
-Socket.prototype._startXhrStream = function(n) {
-  try {
-    var self = this;
-    this._http = new XMLHttpRequest();
-    this._http._index = 1;
-    this._http._streamIndex = n || 0;
-    this._http.open('post', this._httpUrl + '/id?i=' + this._http._streamIndex, true);
-    this._http.onreadystatechange = function() {
-      if (this.readyState == 2 && !!this.old) {
-        this.old.abort();
-        delete this.old;
-      }
-      if (this.readyState > 2 && this.status == 200 && !!this.responseText) {
-        self._handleStream(this);
-      }
-    };
-    this._http.send(null);
-    this._setHTTPTimeout();
-  } catch(e) {
-    util.log('XMLHttpRequest not available; defaulting to WebSockets');
-  }
-};
-
-
-/** Handles onreadystatechange response as a stream. */
-Socket.prototype._handleStream = function(http) {
-  // 3 and 4 are loading/done state. All others are not relevant.
-  var messages = http.responseText.split('\n');
-
-  // Check to see if anything needs to be processed on buffer.
-  if (!!http._buffer) {
-    while (http._buffer.length > 0) {
-      var index = http._buffer.shift();
-      var bufferedMessage = messages[index];
-      try {
-        bufferedMessage = JSON.parse(bufferedMessage);
-      } catch(e) {
-        http._buffer.shift(index);
-        break;
-      }
-      this.emit('message', bufferedMessage);
-    }
-  }
-
-  var message = messages[http._index];
-  if (!!message) {
-    http._index += 1;
-    // Buffering--this message is incomplete and we'll get to it next time.
-    // This checks if the httpResponse ended in a `\n`, in which case the last
-    // element of messages should be the empty string.
-    if (http._index === messages.length) {
-      if (!http._buffer) {
-        http._buffer = [];
-      }
-      http._buffer.push(http._index - 1);
-    } else {
-      try {
-        message = JSON.parse(message);
-      } catch(e) {
-        util.log('Invalid server message', message);
-        return;
-      }
-      this.emit('message', message);
-    }
-  }
-};
-
-Socket.prototype._setHTTPTimeout = function() {
-  var self = this;
-  this._timeout = setTimeout(function() {
-    var old = self._http;
-    if (!self._wsOpen()) {
-      self._startXhrStream(old._streamIndex + 1);
-      self._http.old = old;        
-    } else {
-      old.abort();
-    }
-  }, 25000);
-};
-
-
-Socket.prototype._wsOpen = function() {
-  return !!this._socket && this._socket.readyState == 1;
-};
-
-/** Exposed send for DC & Peer. */
-Socket.prototype.send = function(data) {
-  if (this.disconnected) {
-    return;
-  }
-
-  if (!data.type) {
-    this.emit('error', 'Invalid message');
-    return;
-  }
-  
-  var message = JSON.stringify(data);
-  if (this._wsOpen()) {
-    this._socket.send(message);
-  } else {
-    var http = new XMLHttpRequest();
-    var url = this._httpUrl + '/' + data.type.toLowerCase();
-    http.open('post', url, true);
-    http.setRequestHeader('Content-Type', 'application/json');
-    http.send(message);
-  }
-};
-
-Socket.prototype.close = function() {
-  if (!this.disconnected && this._wsOpen()) {
-    this._socket.close();
-    this.disconnected = true;
-  }
-};
-
-module.exports = Socket;
-
-},{"events":6,"./util":7}],10:[function(require,module,exports){
+},{"events":2,"./util":6,"./dataconnection":7}],10:[function(require,module,exports){
 /*! binarypack.js build:0.0.4, development. Copyright(c) 2012 Eric Zhang <eric@ericzhang.com> MIT Licensed */
 (function(exports){
 var binaryFeatures = {};
@@ -2755,185 +2765,189 @@ Packer.prototype.pack_int64 = function(num){
 })(this);
 
 },{}],11:[function(require,module,exports){
-
-var util = require('./util');
 var EventEmitter = require('events').EventEmitter;
+var util = require('./util');
 
 /**
- * Wraps a DataChannel between two Peers.
+ * An abstraction on top of WebSockets and XHR streaming to provide fastest
+ * possible connection for peers.
  */
-function DataConnection(peer, dc, options) {
-  if (!(this instanceof DataConnection)) return new DataConnection(peer, dc, options);
+function Socket(host, port, key, id) {
+  if (!(this instanceof Socket)) return new Socket(host, port, key, id);
   EventEmitter.call(this);
+  
+  this._id = id;
+  var token = util.randomToken();
 
-  options = util.extend({
-    reliable: false,
-    serialization: 'binary'
-  }, options);
-
-  // Connection is not open yet.
-  this.open = false;
-
-  this.label = options.label;
-  this.metadata = options.metadata;
-  this.serialization = options.serialization;
-  this.peer = peer;
-  this._isReliable = options.reliable;
-
-  this._dc = dc;
-  if (!!this._dc) {
-    this._configureDataChannel();
-  }
+  this.disconnected = false;
+  
+  this._httpUrl = 'http://' + host + ':' + port + '/' + key + '/' + id + '/' + token;
+  this._wsUrl = 'ws://' + host + ':' + port + '/peerjs?key='+key+'&id='+id+'&token='+token;
 };
 
-util.inherits(DataConnection, EventEmitter);
+util.inherits(Socket, EventEmitter);
 
-DataConnection.prototype._configureDataChannel = function() {
+
+/** Check in with ID or get one from server. */
+Socket.prototype.start = function() {  
+  this._startXhrStream();
+  this._startWebSocket();
+};
+
+
+/** Start up websocket communications. */
+Socket.prototype._startWebSocket = function() {
   var self = this;
-  if (util.browserisms !== 'Webkit') {
-    this._dc.binaryType = 'arraybuffer';
-  }
-  this._dc.onopen = function() {
-    util.log('Data channel connection success');
-    self.open = true;
-    self.emit('open');
-  };
 
-  // Reliable.
-  if (this._isReliable) {
-    this._reliable = new Reliable(this._dc, util.debug);
+  if (!!this._socket) {
+    return;
   }
 
-  if (this._reliable) {
-    this._reliable.onmessage = function(msg) {
-      self.emit('data', msg);
-    };
-  } else {
-    this._dc.onmessage = function(e) {
-      self._handleDataMessage(e);
-    };
-  }
-  this._dc.onclose = function(e) {
-    util.log('DataChannel closed.');
-    self.close();
-  };
-
-};
-
-DataConnection.prototype._cleanup = function() {
-  if (!!this._dc && this._dc.readyState !== 'closed') {
-    this._dc.close();
-    this._dc = null;
-  }
-  this.open = false;
-  this.emit('close');
-};
-
-// Handles a DataChannel message.
-DataConnection.prototype._handleDataMessage = function(e) {
-  var self = this;
-  var data = e.data;
-  var datatype = data.constructor;
-  if (this.serialization === 'binary' || this.serialization === 'binary-utf8') {
-    if (datatype === Blob) {
-      util.blobToArrayBuffer(data, function(ab) {
-        data = util.unpack(ab);
-        self.emit('data', data);
-      });
+  this._socket = new WebSocket(this._wsUrl);
+  
+  this._socket.onmessage = function(event) {
+    var data;
+    try {
+      data = JSON.parse(event.data);
+    } catch(e) {
+      util.log('Invalid server message', event.data);
       return;
-    } else if (datatype === ArrayBuffer) {
-      data = util.unpack(data);
-    } else if (datatype === String) {
-      var ab = util.binaryStringToArrayBuffer(data);
-      data = util.unpack(ab);
     }
-  } else if (this.serialization === 'json') {
-    data = JSON.parse(data);
-  }
-  this.emit('data', data);
+    self.emit('message', data);
+  };
+
+  // Take care of the queue of connections if necessary and make sure Peer knows
+  // socket is open.
+  this._socket.onopen = function() {
+    if (!!self._timeout) {
+      clearTimeout(self._timeout);
+      setTimeout(function(){
+        self._http.abort();
+        self._http = null;
+      }, 5000);
+    }
+    util.log('Socket open');
+  };
 };
 
-DataConnection.prototype.addDC = function(dc) {
-  this._dc = dc;
-  this._configureDataChannel();
+/** Start XHR streaming. */
+Socket.prototype._startXhrStream = function(n) {
+  try {
+    var self = this;
+    this._http = new XMLHttpRequest();
+    this._http._index = 1;
+    this._http._streamIndex = n || 0;
+    this._http.open('post', this._httpUrl + '/id?i=' + this._http._streamIndex, true);
+    this._http.onreadystatechange = function() {
+      if (this.readyState == 2 && !!this.old) {
+        this.old.abort();
+        delete this.old;
+      }
+      if (this.readyState > 2 && this.status == 200 && !!this.responseText) {
+        self._handleStream(this);
+      }
+    };
+    this._http.send(null);
+    this._setHTTPTimeout();
+  } catch(e) {
+    util.log('XMLHttpRequest not available; defaulting to WebSockets');
+  }
 };
 
 
-/**
- * Exposed functionality for users.
- */
+/** Handles onreadystatechange response as a stream. */
+Socket.prototype._handleStream = function(http) {
+  // 3 and 4 are loading/done state. All others are not relevant.
+  var messages = http.responseText.split('\n');
 
-/** Allows user to close connection. */
-DataConnection.prototype.close = function() {
-  if (!this.open) {
-    return;
+  // Check to see if anything needs to be processed on buffer.
+  if (!!http._buffer) {
+    while (http._buffer.length > 0) {
+      var index = http._buffer.shift();
+      var bufferedMessage = messages[index];
+      try {
+        bufferedMessage = JSON.parse(bufferedMessage);
+      } catch(e) {
+        http._buffer.shift(index);
+        break;
+      }
+      this.emit('message', bufferedMessage);
+    }
   }
-  this._cleanup();
-};
 
-/** Allows user to send data. */
-DataConnection.prototype.send = function(data) {
-  if (!this.open) {
-    this.emit('error', new Error('Connection no longer open.'));
-  }
-  if (this._reliable) {
-    // Note: reliable sending will make it so that you cannot customize
-    // serialization.
-    this._reliable.send(data);
-    return;
-  }
-  var self = this;
-  if (this.serialization === 'none') {
-    this._dc.send(data);
-  } else if (this.serialization === 'json') {
-    this._dc.send(JSON.stringify(data));
-  } else {
-    var utf8 = (this.serialization === 'binary-utf8');
-    var blob = util.pack(data, utf8);
-    // DataChannel currently only supports strings.
-    if (util.browserisms === 'Webkit') {
-      util.blobToBinaryString(blob, function(str){
-        self._dc.send(str);
-      });
+  var message = messages[http._index];
+  if (!!message) {
+    http._index += 1;
+    // Buffering--this message is incomplete and we'll get to it next time.
+    // This checks if the httpResponse ended in a `\n`, in which case the last
+    // element of messages should be the empty string.
+    if (http._index === messages.length) {
+      if (!http._buffer) {
+        http._buffer = [];
+      }
+      http._buffer.push(http._index - 1);
     } else {
-      this._dc.send(blob);
+      try {
+        message = JSON.parse(message);
+      } catch(e) {
+        util.log('Invalid server message', message);
+        return;
+      }
+      this.emit('message', message);
     }
   }
 };
 
-/**
- * Returns true if the DataConnection is open and able to send messages.
- */
-DataConnection.prototype.isOpen = function() {
-  return this.open;
+Socket.prototype._setHTTPTimeout = function() {
+  var self = this;
+  this._timeout = setTimeout(function() {
+    var old = self._http;
+    if (!self._wsOpen()) {
+      self._startXhrStream(old._streamIndex + 1);
+      self._http.old = old;        
+    } else {
+      old.abort();
+    }
+  }, 25000);
 };
 
-/**
- * Gets the metadata associated with this DataConnection.
- */
-DataConnection.prototype.getMetadata = function() {
-  return this.metadata;
+
+Socket.prototype._wsOpen = function() {
+  return !!this._socket && this._socket.readyState == 1;
 };
 
-/**
- * Gets the label associated with this DataConnection.
- */
-DataConnection.prototype.getLabel = function() {
-  return this.label;
+/** Exposed send for DC & Peer. */
+Socket.prototype.send = function(data) {
+  if (this.disconnected) {
+    return;
+  }
+
+  if (!data.type) {
+    this.emit('error', 'Invalid message');
+    return;
+  }
+  
+  var message = JSON.stringify(data);
+  if (this._wsOpen()) {
+    this._socket.send(message);
+  } else {
+    var http = new XMLHttpRequest();
+    var url = this._httpUrl + '/' + data.type.toLowerCase();
+    http.open('post', url, true);
+    http.setRequestHeader('Content-Type', 'application/json');
+    http.send(message);
+  }
 };
 
-/**
- * Gets the brokering ID of the peer that you are connected with.
- * Note that this ID may be out of date if the peer has disconnected from the
- *  server, so it's not recommended that you use this ID to identify this
- *  connection.
- */
-DataConnection.prototype.getPeer = function() {
-  return this.peer;
+Socket.prototype.close = function() {
+  if (!this.disconnected && this._wsOpen()) {
+    this._socket.close();
+    this.disconnected = true;
+  }
 };
 
-module.exports = DataConnection;
+module.exports = Socket;
 
-},{"events":6,"./util":7}]},{},[1])(1)
+},{"events":2,"./util":6}]},{},[3])(3)
 });
 ;
