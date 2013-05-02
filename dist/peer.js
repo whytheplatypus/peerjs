@@ -1,12 +1,15 @@
-(function(e){if("function"==typeof bootstrap)bootstrap("peer",e);else if("object"==typeof exports)module.exports=e();else if("function"==typeof define&&define.amd)define(e);else if("undefined"!=typeof ses){if(!ses.ok())return;ses.makePeer=e}else"undefined"!=typeof window?window.Peer=e():global.Peer=e()})(function(){var define,ses,bootstrap,module,exports;
+(function(e){if("function"==typeof bootstrap)bootstrap("peerjs",e);else if("object"==typeof exports)module.exports=e();else if("function"==typeof define&&define.amd)define(e);else if("undefined"!=typeof ses){if(!ses.ok())return;ses.makePeerjs=e}else"undefined"!=typeof window?window.peerjs=e():global.peerjs=e()})(function(){var define,ses,bootstrap,module,exports;
 return (function(e,t,n){function i(n,s){if(!t[n]){if(!e[n]){var o=typeof require=="function"&&require;if(!s&&o)return o(n,!0);if(r)return r(n,!0);throw new Error("Cannot find module '"+n+"'")}var u=t[n]={exports:{}};e[n][0].call(u.exports,function(t){var r=e[n][1][t];return i(r?r:t)},u,u.exports)}return t[n].exports}var r=typeof require=="function"&&require;for(var s=0;s<n.length;s++)i(n[s]);return i})({1:[function(require,module,exports){
 require('./adapter');
 require('../deps/reliable/dist/reliable.js');
 
 var Peer = require('./peer');
-
-module.exports = Peer;
-},{"../deps/reliable/dist/reliable.js":2,"./adapter":3,"./peer":4}],2:[function(require,module,exports){
+var DataConnection = require('./dataconnection');
+module.exports = {
+	Peer: Peer,
+	DataConnection: DataConnection
+};
+},{"../deps/reliable/dist/reliable.js":2,"./adapter":3,"./peer":4,"./dataconnection":5}],2:[function(require,module,exports){
 (function(){/*! reliable.js build:0.1.0, development. Copyright(c) 2013 Michelle Bu <michelle@michellebu.com> */
 (function(exports){
 var binaryFeatures = {};
@@ -971,7 +974,7 @@ exports.Reliable = Reliable;
 })(this);
 
 })()
-},{}],5:[function(require,module,exports){
+},{}],6:[function(require,module,exports){
 // shim for using process in browser
 
 var process = module.exports = {};
@@ -1025,7 +1028,7 @@ process.chdir = function (dir) {
     throw new Error('process.chdir is not supported');
 };
 
-},{}],6:[function(require,module,exports){
+},{}],7:[function(require,module,exports){
 (function(process){if (!process.EventEmitter) process.EventEmitter = function () {};
 
 var EventEmitter = exports.EventEmitter = process.EventEmitter;
@@ -1211,7 +1214,7 @@ EventEmitter.prototype.listeners = function(type) {
 };
 
 })(require("__browserify_process"))
-},{"__browserify_process":5}],3:[function(require,module,exports){
+},{"__browserify_process":6}],3:[function(require,module,exports){
 var util = require('./util');
 
 if (window.mozRTCPeerConnection) {
@@ -1227,10 +1230,10 @@ exports.RTCPeerConnection = window.mozRTCPeerConnection || window.webkitRTCPeerC
 
 window.RTCSessionDescription = exports.RTCSessionDescription
 window.RTCPeerConnection = exports.RTCPeerConnection
-},{"./util":7}],4:[function(require,module,exports){
+},{"./util":8}],4:[function(require,module,exports){
 var EventEmitter = require('events').EventEmitter;
 var util = require('./util');
-var ConnectionManager = require('./connectionmanager');
+var cm = require('./connectionmanager');
 var Socket = require('./socket');
 /**
  * A peer who can initiate connections with other peers.
@@ -1289,8 +1292,8 @@ function Peer(id, options) {
 
   // Connections for this peer.
   this.connections = {};
-  // Connection managers.
-  this.managers = {};
+  // Connection peers.
+  this.peers = {};
 
   // Queued connections to make.
   this._queued = [];
@@ -1336,8 +1339,8 @@ Peer.prototype._retrieveId = function(cb) {
 Peer.prototype._init = function() {
   var self = this;
   this._socket = new Socket(this._options.host, this._options.port, this._options.key, this.id);
-  this._socket.on('message', function(data) {
-    self._handleServerJSONMessage(data);
+  this._socket.on('data', function(data) {
+    self._handleBridgeJSONMessage(data);
   });
   this._socket.on('error', function(error) {
     util.log(error);
@@ -1352,10 +1355,11 @@ Peer.prototype._init = function() {
 }
 
 
-Peer.prototype._handleServerJSONMessage = function(message) {
+Peer.prototype._handleBridgeJSONMessage = function(message) {
   var peer = message.src;
-  var manager = this.managers[peer];
+  var manager = this.peers[peer];
   var payload = message.payload;
+
   switch (message.type) {
     case 'OPEN':
       this._processQueue();
@@ -1374,35 +1378,34 @@ Peer.prototype._handleServerJSONMessage = function(message) {
         config: this._options.config
       };
 
-      var manager = this.managers[peer];
+      var manager = this.peers[peer];
       if (!manager) {
-        manager = new ConnectionManager(this.id, peer, this._socket, options);
-        this._attachManagerListeners(manager);
-        this.managers[peer] = manager;
-        this.connections[peer] = manager.connections;
+        manager = cm.openConnection(this.id, peer, this._socket, options);
+        this.emit('connection', manager);
+        this.peers[peer] = manager;
       }
-      manager.update(options.labels);
-      manager.handleSDP(payload.sdp, message.type);
+      //manager.update(options.labels);
+      cm.handleSDP(manager, payload.sdp, message.type);
       break;
     case 'EXPIRE':
       if (manager) {
-        manager.close();
-        manager.emit('error', new Error('Could not connect to peer ' + manager.peer));
+        //manager.close();
+        //manager.emit('error', new Error('Could not connect to peer ' + manager.peer));
       }
       break;
     case 'ANSWER':
       if (manager) {
-        manager.handleSDP(payload.sdp, message.type);
+        cm.handleSDP(manager, payload.sdp, message.type);
       }
       break;
     case 'CANDIDATE':
       if (manager) {
-        manager.handleCandidate(payload);
+        cm.handleCandidate(manager, payload);
       }
       break;
     case 'LEAVE':
       if (manager) {
-        manager.handleLeave();
+        //manager.handleLeave();
       }
       break;
     case 'INVALID-KEY':
@@ -1422,25 +1425,6 @@ Peer.prototype._processQueue = function() {
   }
 };
 
-/** Listeners for manager. */
-Peer.prototype._attachManagerListeners = function(manager) {
-  var self = this;
-  // Handle receiving a connection.
-  manager.on('connection', function(connection) {
-    self.emit('connection', connection);
-  });
-  // Handle a connection closing.
-  manager.on('close', function() {
-    if (!!self.managers[manager.peer]) {
-      delete self.managers[manager.peer];
-      delete self.connections[manager.peer];
-    }
-  });
-  manager.on('error', function(err) {
-    self.emit('error', err);
-  });
-};
-
 /** Destroys the Peer and emits an error message. */
 Peer.prototype._abort = function(type, message) {
   util.log('Aborting. Error:', message);
@@ -1452,10 +1436,10 @@ Peer.prototype._abort = function(type, message) {
 
 Peer.prototype._cleanup = function() {
   var self = this;
-  if (!!this.managers) {
-    var peers = Object.keys(this.managers);
+  if (!!this.peers) {
+    var peers = Object.keys(this.peers);
     for (var i = 0, ii = peers.length; i < ii; i++) {
-      this.managers[peers[i]].close();
+      this.peers[peers[i]].close();
     }
   }
   util.setZeroTimeout(function(){
@@ -1479,7 +1463,7 @@ Peer.prototype.connect = function(peer, options) {
     config: this._options.config
   }, options);
 
-  var manager = this.managers[peer];
+  var manager = this.peers[peer];
 
   // Firefox currently does not support multiplexing once an offer is made.
   if (util.browserisms === 'Firefox' && !!manager && manager.firefoxSingular) {
@@ -1490,23 +1474,12 @@ Peer.prototype.connect = function(peer, options) {
   }
 
   if (!manager) {
-    manager = new ConnectionManager(this.id, peer, this._socket, options);
-    this._attachManagerListeners(manager);
-    this.managers[peer] = manager;
-    this.connections[peer] = manager.connections;
+    manager = cm.openConnection(this.id, peer, this._socket, options);
+    this.emit('connection', manager);
+    this.peers[peer] = manager;
   }
 
-  var connection = manager.connect(options);
-  
-  if (!!connection) {
-    this.connections[peer][connection.label] = connection;
-    this.emit('connection', connection);
-  }
-  if (!this.id) {
-    this._queued.push(manager);
-  }
-
-  return connection;
+  return manager;
 };
 
 /**
@@ -1561,7 +1534,197 @@ Peer.prototype.isDestroyed = function() {
 
 module.exports = Peer;
 
-},{"events":6,"./util":7,"./connectionmanager":8,"./socket":9}],7:[function(require,module,exports){
+},{"events":7,"./util":8,"./connectionmanager":9,"./socket":10}],5:[function(require,module,exports){
+
+var util = require('./util');
+var EventEmitter = require('events').EventEmitter;
+
+/**
+ * Wraps a DataChannel between two Peers.
+ */
+function DataConnection(peer, pc, options) {
+  if (!(this instanceof DataConnection)) return new DataConnection(peer, dc, options);
+  EventEmitter.call(this);
+
+  options = util.extend({
+    serialization: 'binary',
+    label: 'peerjs',
+    reliable: (util.browserisms === 'Firefox')
+  }, options);
+
+  // Connection is not open yet.
+  this.open = false;
+
+  this.label = options.label;
+  this.metadata = options.metadata;
+  this.serialization = options.serialization;
+  this.peer = peer;
+  this.reliable = options.reliable;
+
+  var dc;
+  if (!!pc) {
+    var reliable = util.browserisms === 'Firefox' ? options.reliable : false;
+    dc = pc.createDataChannel(options.label, { reliable: reliable });
+  }
+
+  this._dc = dc;
+  if (!!this._dc) {
+    this._configureDataChannel();
+  }
+};
+
+util.inherits(DataConnection, EventEmitter);
+
+DataConnection.prototype._configureDataChannel = function() {
+  var self = this;
+  if (util.browserisms !== 'Webkit') {
+    // Webkit doesn't support binary yet
+    this._dc.binaryType = 'arraybuffer';
+  }
+  this._dc.onopen = function() {
+    util.log('Data channel connection success');
+    self.open = true;
+    self.emit('open');
+  };
+
+  // Use the Reliable shim for non Firefox browsers
+  if (this.reliable && util.browserisms !== 'Firefox') {
+    this._reliable = new Reliable(this._dc, util.debug);
+  }
+
+  if (this._reliable) {
+    this._reliable.onmessage = function(msg) {
+      self.emit('data', msg);
+    };
+  } else {
+    this._dc.onmessage = function(e) {
+      self._handleDataMessage(e);
+    };
+  }
+  this._dc.onclose = function(e) {
+    util.log('DataChannel closed.');
+    self.close();
+  };
+
+};
+
+DataConnection.prototype._cleanup = function() {
+  if (!!this._dc && this._dc.readyState !== 'closed') {
+    this._dc.close();
+    this._dc = null;
+  }
+  this.open = false;
+  this.emit('close');
+};
+
+// Handles a DataChannel message.
+DataConnection.prototype._handleDataMessage = function(e) {
+  var self = this;
+  var data = e.data;
+  var datatype = data.constructor;
+  if (this.serialization === 'binary' || this.serialization === 'binary-utf8') {
+    if (datatype === Blob) {
+      // Datatype should never be blob
+      util.blobToArrayBuffer(data, function(ab) {
+        data = util.unpack(ab);
+        self.emit('data', data);
+      });
+      return;
+    } else if (datatype === ArrayBuffer) {
+      data = util.unpack(data);
+    } else if (datatype === String) {
+      // String fallback for binary data for browsers that don't support binary yet
+      var ab = util.binaryStringToArrayBuffer(data);
+      data = util.unpack(ab);
+    }
+  } else if (this.serialization === 'json') {
+    data = JSON.parse(data);
+  }
+  this.emit('data', data);
+};
+
+DataConnection.prototype.addDC = function(dc) {
+  this._dc = dc;
+  this._configureDataChannel();
+};
+
+
+/**
+ * Exposed functionality for users.
+ */
+
+/** Allows user to close connection. */
+DataConnection.prototype.close = function() {
+  if (!this.open) {
+    return;
+  }
+  this._cleanup();
+};
+
+/** Allows user to send data. */
+DataConnection.prototype.send = function(data) {
+  if (!this.open) {
+    this.emit('error', new Error('Connection no longer open.'));
+  }
+  if (this._reliable) {
+    // Note: reliable sending will make it so that you cannot customize
+    // serialization.
+    this._reliable.send(data);
+    return;
+  }
+  var self = this;
+  if (this.serialization === 'none') {
+    this._dc.send(data);
+  } else if (this.serialization === 'json') {
+    this._dc.send(JSON.stringify(data));
+  } else {
+    var utf8 = (this.serialization === 'binary-utf8');
+    var blob = util.pack(data, utf8);
+    // DataChannel currently only supports strings.
+    if (util.browserisms === 'Webkit') {
+      util.blobToBinaryString(blob, function(str){
+        self._dc.send(str);
+      });
+    } else {
+      this._dc.send(blob);
+    }
+  }
+};
+
+/**
+ * Returns true if the DataConnection is open and able to send messages.
+ */
+DataConnection.prototype.isOpen = function() {
+  return this.open;
+};
+
+/**
+ * Gets the metadata associated with this DataConnection.
+ */
+DataConnection.prototype.getMetadata = function() {
+  return this.metadata;
+};
+
+/**
+ * Gets the label associated with this DataConnection.
+ */
+DataConnection.prototype.getLabel = function() {
+  return this.label;
+};
+
+/**
+ * Gets the brokering ID of the peer that you are connected with.
+ * Note that this ID may be out of date if the peer has disconnected from the
+ *  server, so it's not recommended that you use this ID to identify this
+ *  connection.
+ */
+DataConnection.prototype.getPeer = function() {
+  return this.peer;
+};
+
+module.exports = DataConnection;
+
+},{"events":7,"./util":8}],8:[function(require,module,exports){
 (function(){var BinaryPack = require('../deps/js-binarypack/dist/binarypack.js').BinaryPack
 var util = {
 
@@ -1687,336 +1850,195 @@ var util = {
 module.exports = util;
 
 })()
-},{"../deps/js-binarypack/dist/binarypack.js":10}],8:[function(require,module,exports){
+},{"../deps/js-binarypack/dist/binarypack.js":11}],9:[function(require,module,exports){
 var util = require('./util');
-var DataConnection = require('./dataconnection');
-var EventEmitter = require('events').EventEmitter;
+//var DataConnection = require('./dataconnection');
+//var EventEmitter = require('events').EventEmitter;
 
 /**
  * Manages DataConnections between its peer and one other peer.
  * Internally, manages PeerConnection.
  */
-function ConnectionManager(id, peer, socket, options) {
-  if (!(this instanceof ConnectionManager)) return new ConnectionManager(id, peer, socket, options);
-  EventEmitter.call(this);
+function openConnection(id, peer, socket, options) {
+  console.log("opening connections to ", peer);
 
   options = util.extend({
     config: { 'iceServers': [{ 'url': 'stun:stun.l.google.com:19302' }] }
   }, options);
-  this._options = options;
+
+  _options = options;
 
   // PeerConnection is not yet dead.
-  this.open = true;
+  open = true;
 
-  this.id = id;
-  this.peer = peer;
-  this.pc = null;
+  var pc = null;
 
   // Mapping labels to metadata and serialization.
   // label => { metadata: ..., serialization: ..., reliable: ...}
-  this.labels = {};
+  var labels = {};
   // A default label in the event that none are passed in.
-  this._default = 0;
+  var _default = 0;
 
   // DataConnections on this PC.
-  this.connections = {};
-  this._queued = [];
+  //this.connections = {};
+  //this._queued = [];
 
-  this._socket = socket;
+  _socket = socket;
 
-  if (!!this.id) {
-    this.initialize();
-  }
-};
-
-util.inherits(ConnectionManager, EventEmitter);
-
-ConnectionManager.prototype.initialize = function(id, socket) {
-  if (!!id) {
-    this.id = id;
-  }
-  if (!!socket) {
-    this._socket = socket;
-  }
-
-  // Set up PeerConnection.
-  this._startPeerConnection();
-
-  // Process queued DCs.
-  this._processQueue();
+  _startPeerConnection();
 
   // Listen for ICE candidates.
-  this._setupIce();
+  _setupIce();
 
   // Listen for negotiation needed.
   // Chrome only **
-  this._setupNegotiationHandler();
+  _setupNegotiationHandler();
 
-  // Listen for data channel.
-  this._setupDataChannel();
-
-  this.initialize = function() { };
-};
-
-/** Start a PC. */
-ConnectionManager.prototype._startPeerConnection = function() {
-  util.log('Creating RTCPeerConnection');
-  this.pc = new RTCPeerConnection(this._options.config, { optional: [ { RtpDataChannels: true } ]});
-};
-
-/** Add DataChannels to all queued DataConnections. */
-ConnectionManager.prototype._processQueue = function() {
-  var conn = this._queued.pop();
-  if (!!conn) {
-    var reliable = util.browserisms === 'Firefox' ? conn.reliable : false;
-    conn.addDC(this.pc.createDataChannel(conn.label, { reliable: reliable }));
+  /** Start a PC. */
+  function _startPeerConnection() {
+    util.log('Creating RTCPeerConnection');
+    pc = new RTCPeerConnection(_options.config, { optional: [ { RtpDataChannels: true } ]});
   }
-};
+
 
 /** Set up ICE candidate handlers. */
-ConnectionManager.prototype._setupIce = function() {
-  util.log('Listening for ICE candidates.');
-  var self = this;
-  this.pc.onicecandidate = function(evt) {
-    if (evt.candidate) {
-      util.log('Received ICE candidates.');
-      self._socket.send({
-        type: 'CANDIDATE',
-        payload: {
-          candidate: evt.candidate
-        },
-        dst: self.peer
-      });
-    }
-  };
-  this.pc.oniceconnectionstatechange = function() {
-    if (!!self.pc && self.pc.iceConnectionState === 'disconnected') {
-      util.log('iceConnectionState is disconnected, closing connections to ' + this.peer);
-      self.close();
-    }
-  };
-  // Fallback for older Chrome impls.
-  this.pc.onicechange = function() {
-    if (!!self.pc && self.pc.iceConnectionState === 'disconnected') {
-      util.log('iceConnectionState is disconnected, closing connections to ' + this.peer);
-      self.close();
-    }
-  };
-};
-
-/** Set up onnegotiationneeded. */
-ConnectionManager.prototype._setupNegotiationHandler = function() {
-  var self = this;
-  util.log('Listening for `negotiationneeded`');
-  this.pc.onnegotiationneeded = function() {
-    util.log('`negotiationneeded` triggered');
-    self._makeOffer();
-  };
-};
-
-/** Set up Data Channel listener. */
-ConnectionManager.prototype._setupDataChannel = function() {
-  var self = this;
-  util.log('Listening for data channel');
-  this.pc.ondatachannel = function(evt) {
-    util.log('Received data channel');
-    var dc = evt.channel;
-    var label = dc.label;
-    // This should not be empty.
-    var options = self.labels[label] || {};
-    var connection  = new DataConnection(self.peer, dc, options);
-    self._attachConnectionListeners(connection);
-    self.connections[label] = connection;
-    self.emit('connection', connection);
-  };
-};
-
-/** Send an offer. */
-ConnectionManager.prototype._makeOffer = function() {
-  var self = this;
-  this.pc.createOffer(function(offer) {
-    util.log('Created offer.');
-    // Firefox currently does not support multiplexing once an offer is made.
-    self.firefoxSingular = true;
-
-    self.pc.setLocalDescription(offer, function() {
-      util.log('Set localDescription to offer');
-      self._socket.send({
-        type: 'OFFER',
-        payload: {
-          sdp: offer,
-          config: self._options.config,
-          labels: self.labels
-        },
-        dst: self.peer
-      });
-      // We can now reset labels because all info has been communicated.
-      self.labels = {};
-    }, function(err) {
-      self.emit('error', err);
-      util.log('Failed to setLocalDescription, ', err);
-    });
-  });
-};
-
-/** Create an answer for PC. */
-ConnectionManager.prototype._makeAnswer = function() {
-  var self = this;
-  this.pc.createAnswer(function(answer) {
-    util.log('Created answer.');
-    self.pc.setLocalDescription(answer, function() {
-      util.log('Set localDescription to answer.');
-      self._socket.send({
-        type: 'ANSWER',
-        payload: {
-          sdp: answer
-        },
-        dst: self.peer
-      });
-    }, function(err) {
-      self.emit('error', err);
-      util.log('Failed to setLocalDescription, ', err);
-    });
-  }, function(err) {
-    self.emit('error', err);
-    util.log('Failed to create answer, ', err);
-  });
-};
-
-/** Clean up PC, close related DCs. */
-ConnectionManager.prototype._cleanup = function() {
-  util.log('Cleanup ConnectionManager for ' + this.peer);
-  if (!!this.pc && (this.pc.readyState !== 'closed' || this.pc.signalingState !== 'closed')) {
-    this.pc.close();
-    this.pc = null;
+  function _setupIce() {
+    util.log('Listening for ICE candidates.');
+    pc.onicecandidate = function(evt) {
+      if (evt.candidate) {
+        util.log('Received ICE candidates.');
+        _socket.send({
+          type: 'CANDIDATE',
+          payload: {
+            candidate: evt.candidate
+          },
+          dst: self.peer
+        });
+      }
+    };
+    pc.oniceconnectionstatechange = function() {
+      if (!!pc && pc.iceConnectionState === 'disconnected') {
+        util.log('iceConnectionState is disconnected, closing connections to ' + this.peer);
+        //self.close();
+      }
+    };
+    // Fallback for older Chrome impls.
+    pc.onicechange = function() {
+      if (!!pc && pc.iceConnectionState === 'disconnected') {
+        util.log('iceConnectionState is disconnected, closing connections to ' + this.peer);
+        //self.close();
+      }
+    };
   }
 
-  var self = this;
-  this._socket.send({
-    type: 'LEAVE',
-    dst: self.peer
-  });
+  function _setupNegotiationHandler() {
+    util.log('Listening for `negotiationneeded`');
+    pc.onnegotiationneeded = function() {
+      util.log('`negotiationneeded` triggered');
+      _makeOffer();
+    };
+  }
 
-  this.open = false;
-  this.emit('close');
-};
+  /** Send an offer. */
+  function _makeOffer(){
+    pc.createOffer(function(offer) {
+      util.log('Created offer.');
+      // Firefox currently does not support multiplexing once an offer is made.
+      self.firefoxSingular = true;
 
-/** Attach connection listeners. */
-ConnectionManager.prototype._attachConnectionListeners = function(connection) {
-  var self = this;
-  connection.on('close', function() {
-    if (!!self.connections[connection.label]) {
-      delete self.connections[connection.label];
+      pc.setLocalDescription(offer, function() {
+        util.log('Set localDescription to offer');
+        _socket.send({
+          type: 'OFFER',
+          payload: {
+            sdp: offer,
+            config: _options.config,
+            labels: labels
+          },
+          dst: self.peer
+        });
+        // We can now reset labels because all info has been communicated.
+        labels = {};
+      }, function(err) {
+        //self.emit('error', err);
+        util.log('Failed to setLocalDescription, ', err);
+      });
+    });
+  }
+
+  /** Create an answer for PC. */
+  function _makeAnswer() {
+    pc.createAnswer(function(answer) {
+      util.log('Created answer.');
+      pc.setLocalDescription(answer, function() {
+        util.log('Set localDescription to answer.');
+        _socket.send({
+          type: 'ANSWER',
+          payload: {
+            sdp: answer
+          },
+          dst: self.peer
+        });
+      }, function(err) {
+        //self.emit('error', err);
+        util.log('Failed to setLocalDescription, ', err);
+      });
+    }, function(err) {
+      //self.emit('error', err);
+      util.log('Failed to create answer, ', err);
+    });
+  }
+
+  /** Clean up PC, close related DCs. */
+  function _cleanup() {
+    util.log('Cleanup ConnectionManager for ' + this.peer);
+    if (!!pc && (pc.readyState !== 'closed' || pc.signalingState !== 'closed')) {
+      pc.close();
+      pc = null;
     }
 
-    if (!Object.keys(self.connections).length) {
-      self._cleanup();
-    }
-  });
-  connection.on('open', function() {
-    self._lock = false;
-    self._processQueue();
-  });
-};
+    _socket.send({
+      type: 'LEAVE',
+      dst: peer
+    });
+
+    //this.open = false;
+    //this.emit('close');
+  };
+
+  return pc;
+}
 
 /** Handle an SDP. */
-ConnectionManager.prototype.handleSDP = function(sdp, type) {
+function handleSDP(pc, sdp, type) {
   sdp = new RTCSessionDescription(sdp);
 
-  var self = this;
-  this.pc.setRemoteDescription(sdp, function() {
+  pc.setRemoteDescription(sdp, function() {
     util.log('Set remoteDescription: ' + type);
     if (type === 'OFFER') {
-      self._makeAnswer();
+      _makeAnswer();
     }
   }, function(err) {
-    self.emit('error', err);
+    //self.emit('error', err);
     util.log('Failed to setRemoteDescription, ', err);
   });
-};
+}
 
 /** Handle a candidate. */
-ConnectionManager.prototype.handleCandidate = function(message) {
+function handleCandidate(pc, message) {
   var candidate = new RTCIceCandidate(message.candidate);
-  this.pc.addIceCandidate(candidate);
+  pc.addIceCandidate(candidate);
   util.log('Added ICE candidate.');
+}
+
+module.exports = {
+  openConnection: openConnection,
+  handleCandidate: handleCandidate,
+  handleSDP: handleSDP
+
 };
 
-/** Handle peer leaving. */
-ConnectionManager.prototype.handleLeave = function() {
-  util.log('Peer ' + this.peer + ' disconnected.');
-  this.close();
-};
-
-/** Closes manager and all related connections. */
-ConnectionManager.prototype.close = function() {
-  if (!this.open) {
-    this.emit('error', new Error('Connections to ' + this.peer + 'are already closed.'));
-    return;
-  }
-
-  var labels = Object.keys(this.connections);
-  for (var i = 0, ii = labels.length; i < ii; i += 1) {
-    var label = labels[i];
-    var connection = this.connections[label];
-    connection.close();
-  }
-  this.connections = null;
-  this._cleanup();
-};
-
-/** Create and returns a DataConnection with the peer with the given label. */
-ConnectionManager.prototype.connect = function(options) {
-  if (!this.open) {
-    return;
-  }
-
-  options = util.extend({
-    label: 'peerjs',
-    reliable: (util.browserisms === 'Firefox')
-  }, options);
-
-  // Check if label is taken...if so, generate a new label randomly.
-  while (!!this.connections[options.label]) {
-    options.label = 'peerjs' + this._default;
-    this._default += 1;
-  }
-
-  this.labels[options.label] = options;
-
-  var dc;
-  if (!!this.pc && !this._lock) {
-    var reliable = util.browserisms === 'Firefox' ? options.reliable : false;
-    dc = this.pc.createDataChannel(options.label, { reliable: reliable });
-    if (util.browserisms === 'Firefox') {
-      this._makeOffer();
-    }
-  }
-  var connection = new DataConnection(this.peer, dc, options);
-  this._attachConnectionListeners(connection);
-  this.connections[options.label] = connection;
-
-  if (!this.pc || this._lock) {
-    this._queued.push(connection);
-  }
-
-  this._lock = true
-  return connection;
-};
-
-/** Updates label:[serialization, reliable, metadata] pairs from offer. */
-ConnectionManager.prototype.update = function(updates) {
-  var labels = Object.keys(updates);
-  for (var i = 0, ii = labels.length; i < ii; i += 1) {
-    var label = labels[i];
-    this.labels[label] = updates[label];
-  }
-};
-
-
-module.exports = ConnectionManager;
-
-},{"events":6,"./util":7,"./dataconnection":11}],9:[function(require,module,exports){
+},{"./util":8}],10:[function(require,module,exports){
 var EventEmitter = require('events').EventEmitter;
 var util = require('./util');
 
@@ -2065,7 +2087,7 @@ Socket.prototype._startWebSocket = function() {
       util.log('Invalid server message', event.data);
       return;
     }
-    self.emit('message', data);
+    self.emit('data', data);
   };
 
   // Take care of the queue of connections if necessary and make sure Peer knows
@@ -2123,7 +2145,7 @@ Socket.prototype._handleStream = function(http) {
         http._buffer.shift(index);
         break;
       }
-      this.emit('message', bufferedMessage);
+      this.emit('data', bufferedMessage);
     }
   }
 
@@ -2145,7 +2167,7 @@ Socket.prototype._handleStream = function(http) {
         util.log('Invalid server message', message);
         return;
       }
-      this.emit('message', message);
+      this.emit('data', message);
     }
   }
 };
@@ -2200,7 +2222,7 @@ Socket.prototype.close = function() {
 
 module.exports = Socket;
 
-},{"events":6,"./util":7}],10:[function(require,module,exports){
+},{"events":7,"./util":8}],11:[function(require,module,exports){
 /*! binarypack.js build:0.0.4, development. Copyright(c) 2012 Eric Zhang <eric@ericzhang.com> MIT Licensed */
 (function(exports){
 var binaryFeatures = {};
@@ -2763,188 +2785,6 @@ Packer.prototype.pack_int64 = function(num){
 
 })(this);
 
-},{}],11:[function(require,module,exports){
-
-var util = require('./util');
-var EventEmitter = require('events').EventEmitter;
-
-/**
- * Wraps a DataChannel between two Peers.
- */
-function DataConnection(peer, dc, options) {
-  if (!(this instanceof DataConnection)) return new DataConnection(peer, dc, options);
-  EventEmitter.call(this);
-
-  options = util.extend({
-    serialization: 'binary'
-  }, options);
-
-  // Connection is not open yet.
-  this.open = false;
-
-  this.label = options.label;
-  this.metadata = options.metadata;
-  this.serialization = options.serialization;
-  this.peer = peer;
-  this.reliable = options.reliable;
-
-  this._dc = dc;
-  if (!!this._dc) {
-    this._configureDataChannel();
-  }
-};
-
-util.inherits(DataConnection, EventEmitter);
-
-DataConnection.prototype._configureDataChannel = function() {
-  var self = this;
-  if (util.browserisms !== 'Webkit') {
-    // Webkit doesn't support binary yet
-    this._dc.binaryType = 'arraybuffer';
-  }
-  this._dc.onopen = function() {
-    util.log('Data channel connection success');
-    self.open = true;
-    self.emit('open');
-  };
-
-  // Use the Reliable shim for non Firefox browsers
-  if (this.reliable && util.browserisms !== 'Firefox') {
-    this._reliable = new Reliable(this._dc, util.debug);
-  }
-
-  if (this._reliable) {
-    this._reliable.onmessage = function(msg) {
-      self.emit('data', msg);
-    };
-  } else {
-    this._dc.onmessage = function(e) {
-      self._handleDataMessage(e);
-    };
-  }
-  this._dc.onclose = function(e) {
-    util.log('DataChannel closed.');
-    self.close();
-  };
-
-};
-
-DataConnection.prototype._cleanup = function() {
-  if (!!this._dc && this._dc.readyState !== 'closed') {
-    this._dc.close();
-    this._dc = null;
-  }
-  this.open = false;
-  this.emit('close');
-};
-
-// Handles a DataChannel message.
-DataConnection.prototype._handleDataMessage = function(e) {
-  var self = this;
-  var data = e.data;
-  var datatype = data.constructor;
-  if (this.serialization === 'binary' || this.serialization === 'binary-utf8') {
-    if (datatype === Blob) {
-      // Datatype should never be blob
-      util.blobToArrayBuffer(data, function(ab) {
-        data = util.unpack(ab);
-        self.emit('data', data);
-      });
-      return;
-    } else if (datatype === ArrayBuffer) {
-      data = util.unpack(data);
-    } else if (datatype === String) {
-      // String fallback for binary data for browsers that don't support binary yet
-      var ab = util.binaryStringToArrayBuffer(data);
-      data = util.unpack(ab);
-    }
-  } else if (this.serialization === 'json') {
-    data = JSON.parse(data);
-  }
-  this.emit('data', data);
-};
-
-DataConnection.prototype.addDC = function(dc) {
-  this._dc = dc;
-  this._configureDataChannel();
-};
-
-
-/**
- * Exposed functionality for users.
- */
-
-/** Allows user to close connection. */
-DataConnection.prototype.close = function() {
-  if (!this.open) {
-    return;
-  }
-  this._cleanup();
-};
-
-/** Allows user to send data. */
-DataConnection.prototype.send = function(data) {
-  if (!this.open) {
-    this.emit('error', new Error('Connection no longer open.'));
-  }
-  if (this._reliable) {
-    // Note: reliable sending will make it so that you cannot customize
-    // serialization.
-    this._reliable.send(data);
-    return;
-  }
-  var self = this;
-  if (this.serialization === 'none') {
-    this._dc.send(data);
-  } else if (this.serialization === 'json') {
-    this._dc.send(JSON.stringify(data));
-  } else {
-    var utf8 = (this.serialization === 'binary-utf8');
-    var blob = util.pack(data, utf8);
-    // DataChannel currently only supports strings.
-    if (util.browserisms === 'Webkit') {
-      util.blobToBinaryString(blob, function(str){
-        self._dc.send(str);
-      });
-    } else {
-      this._dc.send(blob);
-    }
-  }
-};
-
-/**
- * Returns true if the DataConnection is open and able to send messages.
- */
-DataConnection.prototype.isOpen = function() {
-  return this.open;
-};
-
-/**
- * Gets the metadata associated with this DataConnection.
- */
-DataConnection.prototype.getMetadata = function() {
-  return this.metadata;
-};
-
-/**
- * Gets the label associated with this DataConnection.
- */
-DataConnection.prototype.getLabel = function() {
-  return this.label;
-};
-
-/**
- * Gets the brokering ID of the peer that you are connected with.
- * Note that this ID may be out of date if the peer has disconnected from the
- *  server, so it's not recommended that you use this ID to identify this
- *  connection.
- */
-DataConnection.prototype.getPeer = function() {
-  return this.peer;
-};
-
-module.exports = DataConnection;
-
-},{"events":6,"./util":7}]},{},[1])(1)
+},{}]},{},[1])(1)
 });
 ;

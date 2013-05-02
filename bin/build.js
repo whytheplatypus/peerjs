@@ -28,7 +28,7 @@ reliable.bundle({}, function cb(error, src){
 
     var lone = browserify([__dirname + '/../lib/peer_only.js']);
 
-    lone.bundle({standalone: 'Peer'}, function cb(error, src){
+    lone.bundle({standalone: 'peerjs'}, function cb(error, src){
       if(!error){
         fs.write(
             fs.openSync(__dirname + '/../dist/peer.js', 'w')
